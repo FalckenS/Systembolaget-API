@@ -1,0 +1,16 @@
+node_modules/
+npm-debug.log*
+
+dist/
+coverage/
+*.lcov
+*.tsbuildinfo
+.eslintcache
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+.env
+.env.*
