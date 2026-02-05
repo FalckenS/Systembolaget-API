@@ -1,4 +1,4 @@
-import {chromium, Browser, Page} from 'playwright';
+import { chromium, Browser, Page } from 'playwright';
 import fs from 'fs';
 
 const numOfProductsBreak = Infinity;
@@ -22,7 +22,7 @@ function buildUrl(pageNum: number) {
 
 
 function extractCardDetails(cards: Element[]): Product[] {
-    return Array.from(cards)
+    return cards
         // Filter out products (cards) not available
         .filter((card) => {
             return (card.querySelector('.flex.h-6.items-center.justify-center.bg-rose-100.mb-4.last-of-type\\:mb-0') === null);
@@ -65,7 +65,7 @@ function extractCardDetails(cards: Element[]): Product[] {
             const categories = (card.querySelector('p.caption-175')?.textContent ?? '')
                 .split(', ');
 
-            return {name, price, nation, volume, abv, categories};
+            return { name, price, nation, volume, abv, categories };
         });
 }
 
@@ -75,9 +75,9 @@ async function getProductsOnPage(page: Page, pageNum: number) {
 
     try {
         const url = buildUrl(pageNum);
-        await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
         // Wait for one card to appear on the page
-        await page.waitForSelector('div.relative.flex.flex-1.flex-col.px-4', {timeout: 30000});
+        await page.waitForSelector('div.relative.flex.flex-1.flex-col.px-4', { timeout: 30000 });
 
         // page.$$eval(css-selector, pageFunction)
         // pageFunction is executed for all elements (cards) matching css-selector
@@ -88,7 +88,8 @@ async function getProductsOnPage(page: Page, pageNum: number) {
     }
     catch (error) {
         const errorName = error instanceof Error ? error.name : 'UnknownError';
-        if (errorName !== 'TimeoutError') console.error(`Error on page ${pageNum}: ${error}`);
+        if (errorName !== 'TimeoutError')
+            console.error(`Error on page ${pageNum}: ${error}`);
     }
     await page.close();
     return productsOnPage;
@@ -122,12 +123,6 @@ async function scrapePage(browser: Browser, pageNum: number): Promise<Product[]>
 }
 
 
-function writeProductsToJson(products: Product[]) {
-    fs.writeFileSync('products.json', JSON.stringify(products, null, 2));
-    console.log(`Scraping complete. ${products.length} products saved.`);
-}
-
-
 (async () => {
     const browser = await chromium.launch({ headless: true });
     const products: Product[] = [];
@@ -136,7 +131,8 @@ function writeProductsToJson(products: Product[]) {
     while (true) {
         // Generate an array of page numbers to scrape
         const currentPageNums: number[] = [];
-        for (let i = 0; i < concurrentLoadedPages; i++) currentPageNums.push(currentPageNum + i);
+        for (let i = 0; i < concurrentLoadedPages; i++)
+            currentPageNums.push(currentPageNum + i);
 
         const productBatch = currentPageNums.map(
             (pageNum) => scrapePage(browser, pageNum)
@@ -148,8 +144,10 @@ function writeProductsToJson(products: Product[]) {
         products.push(...flattenedResults);
         currentPageNum += concurrentLoadedPages;
 
-        if (flattenedResults.length === 0 || products.length > numOfProductsBreak) break;
+        if (flattenedResults.length === 0 || products.length > numOfProductsBreak)
+            break;
     }
     await browser.close();
-    writeProductsToJson(products);
+    fs.writeFileSync('products.json', JSON.stringify(products, null, 2));
+    console.log(`Scraping complete. ${products.length} products saved.`);
 })();
