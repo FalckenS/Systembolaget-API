@@ -1,13 +1,13 @@
 import { chromium, Browser, Page } from 'playwright';
 import fs from 'fs';
 
-const numOfProductsBreak = Infinity;
-const concurrentLoadedPages = 30;
+const concurrentLoadedPages = 10;
 const date = new Date().toISOString().slice(0, 10);
 
-
 interface Product {
+    nr: number;
     name: string;
+    taste: string;
     price: number;
     nation: string;
     volume: number;
@@ -16,73 +16,88 @@ interface Product {
 }
 
 
-function buildUrl(pageNum: number) {
-    return `https://www.systembolaget.se/sortiment/?sortera-pa=Price&i-riktning=Ascending&sortiment=Fast+sortiment_eller_Lokalt+%26+Sm%C3%A5skaligt_eller_S%C3%A4song_eller_Tillf%C3%A4lligt+sortiment&saljstart-till=${date}&alkoholhalt-fran=3.6&p=${pageNum}`;
-}
-
-
 function extractCardDetails(cards: Element[]): Product[] {
+    const notAvailableProductSelector = 'div.flex.h-6.items-center.justify-center.bg-rose-100.mb-4.last-of-type\\:mb-0';
+    const nrSelector = 'p.sans-175.text-muted-foreground.mt-1.group-hover\\:text-underline';
+    const nameSelector = 'p.monopol-250.text-black.group-hover\\:text-underline';
+    const tasteSelector = 'p.monopol-250.text-muted-foreground.group-hover\\:text-underline';
+    const priceSelector = 'p.sans-strong-175.shrink-0';
+    const otherProductInfoSelector = 'p.sans-175.mr-2.max-w-\\[140px\\].overflow-hidden.text-ellipsis.whitespace-nowrap';
+    const categorySelector = 'p.caption-175.uppercase';
+
     return cards
         // Filter out products (cards) not available
         .filter((card) => {
-            return (card.querySelector('.flex.h-6.items-center.justify-center.bg-rose-100.mb-4.last-of-type\\:mb-0') === null);
+            return (card.querySelector(notAvailableProductSelector) === null);
         })
         // Extract product info
         .map((card) => {
-            const name = card.querySelector('p.monopol-250')?.textContent ?? '';
+            const nr = parseFloat((card.querySelector(nrSelector)?.textContent ?? '')
+                .replace('Nr ', '')
+                .trim()
+            );
 
-            const price = parseFloat((card.querySelector('p.sans-strong-175')?.textContent ?? '')
-                .replaceAll(':', '.')
-                .replaceAll('*', '')
-                .replaceAll(':-', '')
-                .replaceAll(' ', '') // For price >= 1 000
+            const name = card.querySelector(nameSelector)?.textContent ?? '';
+
+            const taste = card.querySelector(tasteSelector)?.textContent ?? '';
+
+            const price = parseFloat((card.querySelector(priceSelector)?.textContent ?? '')
+                .replace(':', '.')
+                .replace('*', '')
+                .replace(':-', '')
+                .replace(' ', '') // For price >= 1 000
             );
 
             /*
             otherProductInfo[]:
 
-            otherProductInfo[0]: Nr
-            otherProductInfo[1]: Nation
-            otherProductInfo[2]: Volume
-            otherProductInfo[3]: Abv
+            otherProductInfo[0]: Nation
+            otherProductInfo[1]: Volume
+            otherProductInfo[2]: Abv
             */
-            const otherProductInfo = Array.from(card.querySelectorAll('p.sans-175'))
+            const otherProductInfo = Array.from(card.querySelectorAll(otherProductInfoSelector))
                 .map((p: Element) => p.textContent ?? '');
 
-            const nation = otherProductInfo[1];
+            const nation = otherProductInfo[0];
 
-            const volume = parseInt(otherProductInfo[2]
-                .replaceAll('ml', '')
+            const volume = parseInt(otherProductInfo[1]
+                .replace('ml', '')
                 .trim()
             );
 
-            const abv = parseFloat(otherProductInfo[3]
-                .replaceAll(',', '.')
-                .replaceAll('% vol.', '')
+            const abv = parseFloat(otherProductInfo[2]
+                .replace(',', '.')
+                .replace('% vol.', '')
                 .trim()
             );
 
-            const categories = (card.querySelector('p.caption-175')?.textContent ?? '')
+            const categories = (card.querySelector(categorySelector)?.textContent ?? '')
                 .split(', ');
 
-            return { name, price, nation, volume, abv, categories };
+            return { nr, name, taste, price, nation, volume, abv, categories };
         });
 }
 
 
-async function getProductsOnPage(page: Page, pageNum: number) {
-    let productsOnPage: Product[] = []
+function buildUrl(pageNum: number) {
+    return `https://www.systembolaget.se/sortiment/?sortera-pa=Price&i-riktning=Ascending&sortiment=Fast+sortiment_eller_Lokalt+%26+Sm%C3%A5skaligt_eller_S%C3%A4song_eller_Tillf%C3%A4lligt+sortiment&saljstart-till=${date}&alkoholhalt-fran=3.6&p=${pageNum}`;
+}
 
+
+async function getProductsOnPage(page: Page, pageNum: number) {
+    const productCardSelector = 'div.flex.grow.flex-col.gap-3';
+    let productsOnPage: Product[] = []
     try {
         const url = buildUrl(pageNum);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
         // Wait for one card to appear on the page
-        await page.waitForSelector('div.relative.flex.flex-1.flex-col.px-4', { timeout: 30000 });
+        await page.waitForSelector(productCardSelector, { timeout: 30000 });
 
         // page.$$eval(css-selector, pageFunction)
         // pageFunction is executed for all elements (cards) matching css-selector
         productsOnPage = await page.$$eval(
-            'div.relative.flex.flex-1.flex-col.px-4',
+            productCardSelector,
             extractCardDetails
         );
     }
@@ -144,10 +159,21 @@ async function scrapePage(browser: Browser, pageNum: number): Promise<Product[]>
         products.push(...flattenedResults);
         currentPageNum += concurrentLoadedPages;
 
-        if (flattenedResults.length === 0 || products.length > numOfProductsBreak)
+        if (flattenedResults.length === 0)
             break;
     }
     await browser.close();
-    fs.writeFileSync('products.json', JSON.stringify(products, null, 2));
-    console.log(`Scraping complete. ${products.length} products saved.`);
+
+    // For some reason there are sometimes duplicate products
+    // Deduplicate products by nr
+    const uniqueProductsMap = new Map<number, Product>();
+    for (const product of products) {
+        if (!uniqueProductsMap.has(product.nr)) {
+            uniqueProductsMap.set(product.nr, product);
+        }
+    }
+    const uniqueProducts = Array.from(uniqueProductsMap.values());
+
+    fs.writeFileSync('products.json', JSON.stringify(uniqueProducts, null, 2));
+    console.log(`Scraping complete. ${uniqueProducts.length} products saved.`);
 })();
